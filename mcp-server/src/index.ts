@@ -359,11 +359,18 @@ registerTools(server);
 const PORT = parseInt(process.env.CLAUDE_MEMORY_PORT || "3847");
 const MODE = process.env.CLAUDE_MEMORY_TRANSPORT || "http"; // "http" or "stdio"
 
+// Session management for persistent MCP connections
+const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
+
 function createRequestHandler() {
   return async (req: IncomingMessage, res: ServerResponse) => {
+    // Log all requests for debugging
+    console.error(`[${new Date().toISOString()}] ${req.method} ${req.url} ${JSON.stringify(req.headers["mcp-session-id"] || "no-session")}`);
+
+    // CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, Authorization, Last-Event-ID");
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     if (req.method === "OPTIONS") {
@@ -378,9 +385,28 @@ function createRequestHandler() {
       return;
     }
 
-    if (req.url === "/mcp" || req.url === "/") {
+    // MCP endpoint
+    const mcpPath = req.url === "/mcp" || req.url === "/";
+    if (!mcpPath) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+
+    // Check for existing session
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    if (req.method === "POST") {
+      // If we have a session ID, reuse the existing transport
+      if (sessionId && sessions.has(sessionId)) {
+        const session = sessions.get(sessionId)!;
+        await session.transport.handleRequest(req, res);
+        return;
+      }
+
+      // New connection — create session with transport
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
+        sessionIdGenerator: () => crypto.randomUUID(),
       });
 
       const reqServer = new McpServer({
@@ -389,13 +415,56 @@ function createRequestHandler() {
       });
       registerTools(reqServer);
 
+      // Track session when ID is assigned
+      transport.onclose = () => {
+        const sid = transport.sessionId;
+        if (sid) {
+          sessions.delete(sid);
+          console.error(`[session] Closed: ${sid}`);
+        }
+      };
+
       await reqServer.connect(transport);
       await transport.handleRequest(req, res);
+
+      // Store session after first request (initialize assigns the ID)
+      const newSessionId = transport.sessionId;
+      if (newSessionId) {
+        sessions.set(newSessionId, { transport, server: reqServer });
+        console.error(`[session] Created: ${newSessionId}`);
+      }
       return;
     }
 
-    res.writeHead(404);
-    res.end("Not found");
+    if (req.method === "GET") {
+      // SSE stream for server-to-client notifications
+      if (sessionId && sessions.has(sessionId)) {
+        const session = sessions.get(sessionId)!;
+        await session.transport.handleRequest(req, res);
+        return;
+      }
+      // No session yet — return 400 (client should POST initialize first)
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No session. Send initialize POST first." }));
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      // Session cleanup
+      if (sessionId && sessions.has(sessionId)) {
+        const session = sessions.get(sessionId)!;
+        await session.transport.handleRequest(req, res);
+        sessions.delete(sessionId);
+        console.error(`[session] Deleted: ${sessionId}`);
+        return;
+      }
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+
+    res.writeHead(405);
+    res.end("Method not allowed");
   };
 }
 
