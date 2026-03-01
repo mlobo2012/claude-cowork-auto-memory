@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claude-cowork-memory": {
+      "type": "http",
+      "url": "YOUR_TUNNEL_URL_HERE/mcp"
+    }
+  }
+}

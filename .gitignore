@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+mcp-server/dist/
+
+# TLS certs (generated locally per machine)
+mcp-server/certs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+/tmp/
+
+# Personal memory data (stays local)
+memory-data/

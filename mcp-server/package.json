@@ -1,0 +1,30 @@
+{
+  "name": "claude-cowork-memory-server",
+  "version": "1.0.0",
+  "description": "MCP server providing persistent auto-memory for Claude CoWork across folders and sessions",
+  "license": "MIT",
+  "author": {
+    "name": "Marco"
+  },
+  "type": "module",
+  "bin": {
+    "claude-cowork-memory-server": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.6.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "auto-memory",
+  "version": "1.0.0",
+  "description": "Persistent auto-memory for Claude CoWork. Remembers people, preferences, terms, projects, and decisions across every session and folder — just like Claude Code's built-in auto memory.",
+  "author": {
+    "name": "Marco"
+  }
+}

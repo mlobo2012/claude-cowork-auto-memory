@@ -1,0 +1,461 @@
+#!/usr/bin/env node
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
+import { promises as fs } from "fs";
+import path from "path";
+import os from "os";
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "http";
+import { createServer as createHttpsServer } from "https";
+import crypto from "crypto";
+
+// Memory directory — configurable via env var, defaults to ~/Documents/claude-memory
+const MEMORY_DIR =
+  process.env.CLAUDE_MEMORY_DIR ||
+  path.join(os.homedir(), "Documents", "claude-memory");
+
+const MEMORY_FILE = "MEMORY.md";
+const STATS_FILE = "_stats.md";
+const MAX_LINES = 150;
+
+// --- Helpers ---
+
+async function ensureMemoryDir(): Promise<void> {
+  await fs.mkdir(MEMORY_DIR, { recursive: true });
+}
+
+async function memoryPath(filename: string): Promise<string> {
+  await ensureMemoryDir();
+  return path.join(MEMORY_DIR, filename);
+}
+
+async function fileExists(filepath: string): Promise<boolean> {
+  try {
+    await fs.access(filepath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readMemoryFile(filename: string): Promise<string> {
+  const filepath = await memoryPath(filename);
+  if (await fileExists(filepath)) {
+    return await fs.readFile(filepath, "utf-8");
+  }
+  return "";
+}
+
+async function writeMemoryFile(
+  filename: string,
+  content: string
+): Promise<void> {
+  const filepath = await memoryPath(filename);
+  // Ensure subdirectory exists for nested files like memory/people.md
+  await fs.mkdir(path.dirname(filepath), { recursive: true });
+  await fs.writeFile(filepath, content, "utf-8");
+}
+
+async function listMemoryFiles(): Promise<string[]> {
+  await ensureMemoryDir();
+  const files: string[] = [];
+
+  async function walk(dir: string, prefix: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(path.join(dir, entry.name), relative);
+      } else if (entry.name.endsWith(".md")) {
+        files.push(relative);
+      }
+    }
+  }
+
+  await walk(MEMORY_DIR, "");
+  return files.sort();
+}
+
+async function searchFiles(query: string): Promise<string> {
+  const files = await listMemoryFiles();
+  const results: string[] = [];
+  const queryLower = query.toLowerCase();
+
+  for (const file of files) {
+    const content = await readMemoryFile(file);
+    const lines = content.split("\n");
+    const matches: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].toLowerCase().includes(queryLower)) {
+        matches.push(`  L${i + 1}: ${lines[i]}`);
+      }
+    }
+
+    if (matches.length > 0) {
+      results.push(`**${file}** (${matches.length} matches):`);
+      results.push(...matches);
+      results.push("");
+    }
+  }
+
+  if (results.length === 0) {
+    return `No matches found for "${query}" across ${files.length} memory files.`;
+  }
+
+  return results.join("\n");
+}
+
+async function getStats(): Promise<string> {
+  const files = await listMemoryFiles();
+  let totalLines = 0;
+  let totalEntries = 0;
+
+  for (const file of files) {
+    const content = await readMemoryFile(file);
+    const lines = content.split("\n");
+    totalLines += lines.length;
+    totalEntries += lines.filter((l) => l.trim().startsWith("- ")).length;
+  }
+
+  // Read stats file
+  const statsContent = await readMemoryFile(STATS_FILE);
+
+  // Parse session count
+  const sessionMatch = statsContent.match(/Session count:\s*(\d+)/);
+  const sessionCount = sessionMatch ? parseInt(sessionMatch[1]) : 0;
+
+  const mainContent = await readMemoryFile(MEMORY_FILE);
+  const mainLines = mainContent.split("\n").length;
+
+  return [
+    "# Memory Stats",
+    "",
+    `- **Files:** ${files.length}`,
+    `- **Total lines:** ${totalLines}`,
+    `- **Total entries:** ${totalEntries}`,
+    `- **MEMORY.md lines:** ${mainLines} / ${MAX_LINES} cap`,
+    `- **Session count:** ${sessionCount}`,
+    `- **Memory directory:** ${MEMORY_DIR}`,
+    "",
+    "## Files:",
+    ...files.map((f) => `- ${f}`),
+  ].join("\n");
+}
+
+async function incrementSession(): Promise<number> {
+  const statsPath = await memoryPath(STATS_FILE);
+  let content = await readMemoryFile(STATS_FILE);
+
+  if (!content) {
+    content = [
+      "# Memory Stats",
+      `- Session count: 1`,
+      `- Last maintenance: never`,
+      `- Created: ${new Date().toISOString().split("T")[0]}`,
+    ].join("\n");
+    await writeMemoryFile(STATS_FILE, content);
+    return 1;
+  }
+
+  const match = content.match(/Session count:\s*(\d+)/);
+  const current = match ? parseInt(match[1]) : 0;
+  const next = current + 1;
+
+  content = content.replace(
+    /Session count:\s*\d+/,
+    `Session count: ${next}`
+  );
+  await writeMemoryFile(STATS_FILE, content);
+  return next;
+}
+
+async function initMemory(): Promise<string> {
+  await ensureMemoryDir();
+  const memPath = await memoryPath(MEMORY_FILE);
+
+  if (await fileExists(memPath)) {
+    return "Memory already initialized. MEMORY.md exists.";
+  }
+
+  const template = [
+    "# Memory",
+    "",
+    "> Persistent memory maintained automatically. Keep under 150 lines.",
+    "",
+    "## People",
+    "",
+    "## Preferences",
+    "",
+    "## Key Terms",
+    "",
+    "## Projects",
+    "",
+    "## Decisions",
+  ].join("\n");
+
+  await writeMemoryFile(MEMORY_FILE, template);
+  await writeMemoryFile(
+    STATS_FILE,
+    [
+      "# Memory Stats",
+      "- Session count: 0",
+      "- Last maintenance: never",
+      `- Created: ${new Date().toISOString().split("T")[0]}`,
+    ].join("\n")
+  );
+
+  return `Memory initialized at ${MEMORY_DIR}`;
+}
+
+// --- MCP Server ---
+
+function registerTools(server: McpServer): void {
+
+// Tool: Read a memory file
+server.tool(
+  "memory_read",
+  "Read a memory file. Defaults to MEMORY.md (the main hot cache). Use at the start of every session to load persistent memory.",
+  {
+    file: z
+      .string()
+      .optional()
+      .default(MEMORY_FILE)
+      .describe(
+        'Filename to read, relative to memory directory. Defaults to "MEMORY.md".'
+      ),
+  },
+  async ({ file }) => {
+    const content = await readMemoryFile(file);
+    if (!content) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `File "${file}" not found. Use memory_init to create the memory directory, or memory_write to create this file.`,
+          },
+        ],
+      };
+    }
+    return { content: [{ type: "text" as const, text: content }] };
+  }
+);
+
+// Tool: Write a memory file
+server.tool(
+  "memory_write",
+  "Write content to a memory file. Use to update MEMORY.md or create/update topic files (e.g., people.md, projects.md). Overwrites the entire file.",
+  {
+    file: z
+      .string()
+      .optional()
+      .default(MEMORY_FILE)
+      .describe(
+        'Filename to write, relative to memory directory. Defaults to "MEMORY.md".'
+      ),
+    content: z.string().describe("The full content to write to the file."),
+  },
+  async ({ file, content }) => {
+    await writeMemoryFile(file, content);
+    const lines = content.split("\n").length;
+    let warning = "";
+    if (file === MEMORY_FILE && lines > MAX_LINES) {
+      warning = `\n\nWARNING: MEMORY.md is ${lines} lines (cap is ${MAX_LINES}). Move less-used entries to topic files.`;
+    }
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Written ${lines} lines to ${file}.${warning}`,
+        },
+      ],
+    };
+  }
+);
+
+// Tool: Search across all memory files
+server.tool(
+  "memory_search",
+  "Search for a term across all memory files. Returns matching lines with file and line number references.",
+  {
+    query: z.string().describe("The search term (case-insensitive)."),
+  },
+  async ({ query }) => {
+    const results = await searchFiles(query);
+    return { content: [{ type: "text" as const, text: results }] };
+  }
+);
+
+// Tool: List all memory files
+server.tool(
+  "memory_list",
+  "List all files in the memory directory.",
+  {},
+  async () => {
+    const files = await listMemoryFiles();
+    if (files.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "No memory files found. Use memory_init to initialize.",
+          },
+        ],
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: files.join("\n") }],
+    };
+  }
+);
+
+// Tool: Get memory stats and increment session counter
+server.tool(
+  "memory_stats",
+  "Get memory statistics (file count, line count, session count) and increment the session counter. Call this at the start of each session.",
+  {},
+  async () => {
+    const sessionCount = await incrementSession();
+    const stats = await getStats();
+
+    let maintenanceNote = "";
+    if (sessionCount % 10 === 0) {
+      maintenanceNote =
+        "\n\n**MAINTENANCE DUE:** Session count is a multiple of 10. Run maintenance: remove stale entries (>60 days, never re-referenced), merge duplicates, verify MEMORY.md is under 150 lines.";
+    }
+
+    return {
+      content: [
+        { type: "text" as const, text: stats + maintenanceNote },
+      ],
+    };
+  }
+);
+
+// Tool: Initialize memory directory
+server.tool(
+  "memory_init",
+  "Initialize the memory directory with a blank MEMORY.md template. Safe to call if already initialized.",
+  {},
+  async () => {
+    const result = await initMemory();
+    return { content: [{ type: "text" as const, text: result }] };
+  }
+);
+
+} // end registerTools
+
+// Create a default server for stdio mode
+const server = new McpServer({
+  name: "claude-cowork-memory",
+  version: "1.0.0",
+});
+registerTools(server);
+
+// --- Start server ---
+
+const PORT = parseInt(process.env.CLAUDE_MEMORY_PORT || "3847");
+const MODE = process.env.CLAUDE_MEMORY_TRANSPORT || "http"; // "http" or "stdio"
+
+function createRequestHandler() {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", memoryDir: MEMORY_DIR }));
+      return;
+    }
+
+    if (req.url === "/mcp" || req.url === "/") {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+
+      const reqServer = new McpServer({
+        name: "claude-cowork-memory",
+        version: "1.0.0",
+      });
+      registerTools(reqServer);
+
+      await reqServer.connect(transport);
+      await transport.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(404);
+    res.end("Not found");
+  };
+}
+
+async function startHttp(): Promise<void> {
+  await ensureMemoryDir();
+
+  const handler = createRequestHandler();
+
+  // Try HTTPS first (required by CoWork), fall back to HTTP
+  // Certs live at mcp-server/certs/ — dist/ is one level below
+  const { fileURLToPath } = await import("url");
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const certDir = path.join(__dirname, "..", "certs");
+  let useHttps = false;
+  let tlsKey: string | undefined;
+  let tlsCert: string | undefined;
+
+  try {
+    tlsKey = await fs.readFile(path.join(certDir, "key.pem"), "utf-8");
+    tlsCert = await fs.readFile(path.join(certDir, "cert.pem"), "utf-8");
+    useHttps = true;
+  } catch {
+    // No certs found, fall back to HTTP
+  }
+
+  if (useHttps) {
+    const httpsServer = createHttpsServer({ key: tlsKey, cert: tlsCert }, handler);
+    httpsServer.listen(PORT, () => {
+      console.error(`Claude CoWork Memory Server running on https://localhost:${PORT}/mcp`);
+      console.error(`Memory directory: ${MEMORY_DIR}`);
+      console.error(`Health check: https://localhost:${PORT}/health`);
+    });
+  } else {
+    const httpServer = createHttpServer(handler);
+    httpServer.listen(PORT, () => {
+      console.error(`Claude CoWork Memory Server running on http://localhost:${PORT}/mcp`);
+      console.error(`Memory directory: ${MEMORY_DIR}`);
+      console.error(`Health check: http://localhost:${PORT}/health`);
+    });
+  }
+}
+
+async function startStdio(): Promise<void> {
+  await ensureMemoryDir();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error(
+    `Claude CoWork Memory Server running on stdio (memory dir: ${MEMORY_DIR})`
+  );
+}
+
+async function main(): Promise<void> {
+  if (MODE === "stdio") {
+    await startStdio();
+  } else {
+    await startHttp();
+  }
+}
+
+main().catch((error: Error) => {
+  console.error("Fatal error:", error);
+  process.exit(1);
+});
