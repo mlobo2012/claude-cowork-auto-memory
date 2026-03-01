@@ -22,7 +22,7 @@ Persistent memory for [Claude CoWork](https://claude.ai/cowork) that works acros
 └─────────────────────────────────────────────────────┘
 ```
 
-- Memory lives on **your machine** — nothing is sent to external servers
+- **100% local** — all memory is stored as plain markdown files on your machine (`~/Documents/claude-memory/`). Nothing is sent to or stored on external servers. The Cloudflare tunnel used during setup is just a pass-through to give your local server an `https://` URL that CoWork requires — it does not store, log, or inspect your data.
 - Works across **every folder and session** — not tied to a single project
 - Claude **auto-saves** relevant knowledge as you talk (no commands needed)
 - Every 10 sessions, Claude runs **maintenance** to prune stale entries and stay under limits
