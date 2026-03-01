@@ -1,6 +1,6 @@
 # Claude CoWork Auto-Memory
 
-Persistent memory for [Claude CoWork](https://claude.ai/cowork) that works across every session and folder. Claude automatically remembers people, preferences, terms, projects, and decisions — just like Claude Code's built-in auto-memory.
+Persistent memory for [Claude CoWork](https://claude.ai/cowork) that works across every session and folder. Claude automatically remembers people, preferences, terms, projects, and decisions — just like OpenClaw and Claude Code's built-in auto-memory.
 
 ## How it works
 
@@ -8,7 +8,7 @@ Persistent memory for [Claude CoWork](https://claude.ai/cowork) that works acros
 ┌─────────────────────────────────────────────────────┐
 │  Claude CoWork (any folder, any session)             │
 │                                                      │
-│  "Marco prefers dark mode and uses Tailwind"        │
+│  "Marco prefers Cheeseburgers over hamburgers"       │
 │         │                                            │
 │         ▼                                            │
 │  MCP Server (runs on your machine)                   │
