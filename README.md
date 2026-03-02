@@ -12,7 +12,7 @@ The plugin has two parts that work together:
 
 ### 1. Behavioral instructions (the brain)
 
-A set of rules you paste into CoWork's Global Instructions (see `GLOBAL-INSTRUCTIONS.md`). These teach Claude to:
+A set of rules delivered automatically by the MCP server when CoWork connects (via the MCP `instructions` field). No copy-pasting needed. These teach Claude to:
 
 - **Read memory** at the start of every session (so it knows who you are)
 - **Auto-save** new knowledge as you talk — people, preferences, terms, projects, decisions
@@ -149,18 +149,13 @@ Keep this terminal open while using CoWork.
    - **URL:** paste the URL from step 2
 4. Click **Add**
 
-### 4. Add global instructions
+### 4. Done — no extra setup needed
 
-This is what makes Claude actually **use** the memory tools automatically — reading at session start, auto-saving knowledge, running maintenance. Without this, Claude has the tools but won't use them proactively.
+The MCP server delivers its behavioral instructions automatically when CoWork connects. Claude receives the complete auto-save protocol (when to save, dedup rules, maintenance, contradiction handling) as part of the MCP handshake. **No global instructions or plugin installation required.**
 
-1. Open the file `GLOBAL-INSTRUCTIONS.md` in this repo
-2. Copy everything below the `---` line
-3. Go to CoWork → **Settings** → **Global Instructions**
-4. Paste it in
+> **Optional fallback:** If Claude doesn't seem to auto-save after a few sessions, you can reinforce the behavior by pasting the contents of `GLOBAL-INSTRUCTIONS.md` into CoWork → Settings → Global Instructions. This is usually not needed — the MCP server instructions are sufficient.
 
-This is ~25 lines that teach Claude the complete auto-save behavior: when to save, how to check for duplicates, how to handle contradictions, and when to run maintenance. It uses less than 1% of the context window.
-
-### 5. Test it
+### 5. Test it (optional)
 
 Start a new CoWork session in any folder and say:
 
@@ -269,8 +264,8 @@ CLAUDE_MEMORY_DIR=~/Dropbox/claude-memory ./start.sh
 
 **Claude doesn't use memory automatically**
 - Verify the connector shows as connected in CoWork → Customize → Connectors
-- Make sure global instructions are set (step 4 above)
 - Try explicitly: "Use your memory tools to read your memory"
+- As a fallback, paste the contents of `GLOBAL-INSTRUCTIONS.md` into CoWork → Settings → Global Instructions
 
 **Memory not found / empty on new machine**
 - Memory is stored locally per machine at `~/Documents/claude-memory/`
@@ -282,7 +277,7 @@ CLAUDE_MEMORY_DIR=~/Dropbox/claude-memory ./start.sh
 |---------|------------|-------------|
 | Persistent across sessions | Built-in | Yes (via MCP) |
 | Cross-project/folder | Yes | Yes |
-| Auto-saves knowledge | Engine-level (guaranteed) | Skill instructions (~95%) |
+| Auto-saves knowledge | Engine-level (guaranteed) | MCP instructions (3-layer reinforcement) |
 | Memory cap | 200 lines | 150 lines |
 | Topic file overflow | Yes | Yes |
 | Maintenance/pruning | Automatic | Every 10 sessions |

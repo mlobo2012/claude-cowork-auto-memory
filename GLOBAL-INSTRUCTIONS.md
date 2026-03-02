@@ -1,6 +1,8 @@
-# Global Instructions for Claude CoWork
+# Global Instructions (Optional Fallback)
 
-Paste everything below the `---` line into: **CoWork → Settings → Global Instructions**
+The MCP server now delivers these instructions automatically via the MCP `instructions` field. You should **not** need to paste anything into CoWork's global instructions.
+
+**Only use this if** Claude doesn't seem to auto-save knowledge after a few sessions. In that case, paste everything below the `---` line into: **CoWork → Settings → Global Instructions**
 
 ---
 

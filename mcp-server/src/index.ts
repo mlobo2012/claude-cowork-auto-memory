@@ -212,12 +212,42 @@ async function initMemory(): Promise<string> {
 
 // --- MCP Server ---
 
+// Layer 1: Server instructions — full behavioral protocol delivered automatically on connect.
+// No user setup required. This is the MCP spec's purpose-built mechanism for guiding model behavior.
+const SERVER_INSTRUCTIONS = `You have persistent memory via this MCP server. Follow these rules every session.
+
+SESSION START: Before responding to the user, call memory_stats then memory_read to load your memory. Use this knowledge naturally — do not announce what you remember unless directly relevant. If memory_stats says MAINTENANCE DUE, run maintenance before proceeding.
+
+AUTO-SAVE TRIGGERS — save when you detect any of these during conversation:
+- Corrections to facts you stated or believed
+- New people with identifying context (role, team, relationship)
+- New terms, acronyms, jargon, or shorthand the user uses
+- Preferences for how the user likes things done (format, tone, tools, workflows)
+- Decisions about approach, tools, direction, or strategy
+- Project changes (new projects, status updates, completions, scope changes)
+- Recurring patterns, workflows, or habits you notice
+Do NOT save: trivial session details, temporary debugging steps, speculative info, or anything already accurately stored in memory.
+
+HOW TO SAVE:
+1. Call memory_search with the key term first. If the info already exists and is accurate, do nothing.
+2. If outdated or contradicted, read the file, update the entry in place with the current date, and write back. Do not duplicate.
+3. New entries format: - [fact] (YYYY-MM-DD)
+4. MEMORY.md must stay under 150 lines. When approaching the limit, move less-referenced entries to topic files (people.md, projects.md, preferences.md, terms.md, archive.md) and leave a one-line pointer in MEMORY.md.
+5. Briefly note significant memory updates to the user ("Noted — updated Sarah's location in memory."). Don't announce trivial saves.
+
+MAINTENANCE (every 10 sessions, when memory_stats says MAINTENANCE DUE):
+1. Read all memory files. 2. Remove entries older than 60 days that were never re-referenced.
+3. Merge duplicate or overlapping entries. 4. Verify MEMORY.md is under 150 lines.
+5. Move completed projects to archive.md. 6. Update _stats.md with maintenance date.
+
+CONTRADICTIONS: Update the entry with new info and current date. If the change is significant (role change, project cancellation, preference reversal), briefly confirm with the user before overwriting.`;
+
+// Layer 2: Enhanced tool descriptions — reinforce key behaviors at point of use.
 function registerTools(server: McpServer): void {
 
-// Tool: Read a memory file
 server.tool(
   "memory_read",
-  "Read a memory file. Defaults to MEMORY.md (the main hot cache). Use at the start of every session to load persistent memory.",
+  "Read a memory file. Defaults to MEMORY.md (the main hot cache). Call this at the start of every session immediately after memory_stats to load persistent memory. Use the loaded knowledge naturally without announcing it.",
   {
     file: z
       .string()
@@ -243,10 +273,9 @@ server.tool(
   }
 );
 
-// Tool: Write a memory file
 server.tool(
   "memory_write",
-  "Write content to a memory file. Use to update MEMORY.md or create/update topic files (e.g., people.md, projects.md). Overwrites the entire file.",
+  "Write content to a memory file. Overwrites the entire file. IMPORTANT: Always call memory_search first to check if the info already exists — do not duplicate. Use entry format: - [fact] (YYYY-MM-DD). Keep MEMORY.md under 150 lines; overflow to topic files (people.md, projects.md, preferences.md, terms.md, archive.md).",
   {
     file: z
       .string()
@@ -260,6 +289,7 @@ server.tool(
   async ({ file, content }) => {
     await writeMemoryFile(file, content);
     const lines = content.split("\n").length;
+    // Layer 3: Tool response guidance — contextual warnings at the moment they matter.
     let warning = "";
     if (file === MEMORY_FILE && lines > MAX_LINES) {
       warning = `\n\nWARNING: MEMORY.md is ${lines} lines (cap is ${MAX_LINES}). Move less-used entries to topic files.`;
@@ -275,10 +305,9 @@ server.tool(
   }
 );
 
-// Tool: Search across all memory files
 server.tool(
   "memory_search",
-  "Search for a term across all memory files. Returns matching lines with file and line number references.",
+  "Search for a term across all memory files. Returns matching lines with file and line numbers. Always call this before memory_write to avoid duplicating existing entries.",
   {
     query: z.string().describe("The search term (case-insensitive)."),
   },
@@ -288,10 +317,9 @@ server.tool(
   }
 );
 
-// Tool: List all memory files
 server.tool(
   "memory_list",
-  "List all files in the memory directory.",
+  "List all files in the memory directory. Useful during maintenance to understand what topic files exist.",
   {},
   async () => {
     const files = await listMemoryFiles();
@@ -311,19 +339,19 @@ server.tool(
   }
 );
 
-// Tool: Get memory stats and increment session counter
 server.tool(
   "memory_stats",
-  "Get memory statistics (file count, line count, session count) and increment the session counter. Call this at the start of each session.",
+  "Get memory statistics and increment session counter. Call this FIRST at the start of every session, before memory_read. If the result says MAINTENANCE DUE, run the maintenance protocol before proceeding with the conversation.",
   {},
   async () => {
     const sessionCount = await incrementSession();
     const stats = await getStats();
 
+    // Layer 3: Maintenance trigger in tool response
     let maintenanceNote = "";
     if (sessionCount % 10 === 0) {
       maintenanceNote =
-        "\n\n**MAINTENANCE DUE:** Session count is a multiple of 10. Run maintenance: remove stale entries (>60 days, never re-referenced), merge duplicates, verify MEMORY.md is under 150 lines.";
+        "\n\n**MAINTENANCE DUE:** Session count is a multiple of 10. Run maintenance: read all files, remove stale entries (>60 days, never re-referenced), merge duplicates, verify MEMORY.md is under 150 lines, archive completed projects, update _stats.md with maintenance date.";
     }
 
     return {
@@ -334,10 +362,9 @@ server.tool(
   }
 );
 
-// Tool: Initialize memory directory
 server.tool(
   "memory_init",
-  "Initialize the memory directory with a blank MEMORY.md template. Safe to call if already initialized.",
+  "Initialize the memory directory with a blank MEMORY.md template. Safe to call if already initialized. Only needed on first use.",
   {},
   async () => {
     const result = await initMemory();
@@ -347,11 +374,16 @@ server.tool(
 
 } // end registerTools
 
+// Server options with instructions — delivered automatically to every client on connect
+const SERVER_OPTIONS = {
+  instructions: SERVER_INSTRUCTIONS,
+};
+
 // Create a default server for stdio mode
-const server = new McpServer({
-  name: "claude-cowork-memory",
-  version: "1.0.0",
-});
+const server = new McpServer(
+  { name: "claude-cowork-memory", version: "1.0.0" },
+  SERVER_OPTIONS,
+);
 registerTools(server);
 
 // --- Start server ---
@@ -426,10 +458,10 @@ function createRequestHandler() {
           sessionIdGenerator: () => crypto.randomUUID(),
         });
 
-        const reqServer = new McpServer({
-          name: "claude-cowork-memory",
-          version: "1.0.0",
-        });
+        const reqServer = new McpServer(
+          { name: "claude-cowork-memory", version: "1.0.0" },
+          SERVER_OPTIONS,
+        );
         registerTools(reqServer);
 
         transport.onclose = () => {
