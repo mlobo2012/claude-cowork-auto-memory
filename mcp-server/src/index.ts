@@ -364,29 +364,45 @@ const sessions = new Map<string, { transport: StreamableHTTPServerTransport; ser
 
 function createRequestHandler() {
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Log all requests for debugging
-    console.error(`[${new Date().toISOString()}] ${req.method} ${req.url} ${JSON.stringify(req.headers["mcp-session-id"] || "no-session")}`);
+    // Log all requests with headers for debugging
+    console.error(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.error(`  Headers: ${JSON.stringify({
+      accept: req.headers.accept,
+      "content-type": req.headers["content-type"],
+      "mcp-session-id": req.headers["mcp-session-id"],
+      authorization: req.headers.authorization ? "(present)" : "(none)",
+    })}`);
 
-    // CORS headers
+    // CORS headers — wide open for maximum compatibility
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, Authorization, Last-Event-ID");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
+    res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.setHeader("Access-Control-Max-Age", "86400");
 
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
+    if (req.method === "OPTIONS" || req.method === "HEAD") {
+      res.writeHead(200);
       res.end();
       return;
     }
 
-    if (req.method === "GET" && req.url === "/health") {
+    // Health endpoint
+    if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", memoryDir: MEMORY_DIR }));
       return;
     }
 
-    // MCP endpoint
-    const mcpPath = req.url === "/mcp" || req.url === "/";
+    // OAuth well-known endpoints — return "no auth required"
+    if (req.url?.startsWith("/.well-known/")) {
+      console.error(`  -> Well-known request (returning 404 — no auth required)`);
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+
+    // MCP endpoint — accept /mcp, /mcp/, and /
+    const mcpPath = req.url === "/mcp" || req.url === "/mcp/" || req.url === "/";
     if (!mcpPath) {
       res.writeHead(404);
       res.end("Not found");
@@ -397,60 +413,72 @@ function createRequestHandler() {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
     if (req.method === "POST") {
-      // If we have a session ID, reuse the existing transport
-      if (sessionId && sessions.has(sessionId)) {
-        const session = sessions.get(sessionId)!;
-        await session.transport.handleRequest(req, res);
-        return;
-      }
-
-      // New connection — create session with transport
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-      });
-
-      const reqServer = new McpServer({
-        name: "claude-cowork-memory",
-        version: "1.0.0",
-      });
-      registerTools(reqServer);
-
-      // Track session when ID is assigned
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) {
-          sessions.delete(sid);
-          console.error(`[session] Closed: ${sid}`);
+      try {
+        // If we have a session ID, reuse the existing transport
+        if (sessionId && sessions.has(sessionId)) {
+          const session = sessions.get(sessionId)!;
+          await session.transport.handleRequest(req, res);
+          return;
         }
-      };
 
-      await reqServer.connect(transport);
-      await transport.handleRequest(req, res);
+        // New connection — create session with transport
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+        });
 
-      // Store session after first request (initialize assigns the ID)
-      const newSessionId = transport.sessionId;
-      if (newSessionId) {
-        sessions.set(newSessionId, { transport, server: reqServer });
-        console.error(`[session] Created: ${newSessionId}`);
+        const reqServer = new McpServer({
+          name: "claude-cowork-memory",
+          version: "1.0.0",
+        });
+        registerTools(reqServer);
+
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid) {
+            sessions.delete(sid);
+            console.error(`[session] Closed: ${sid}`);
+          }
+        };
+
+        await reqServer.connect(transport);
+        await transport.handleRequest(req, res);
+
+        const newSessionId = transport.sessionId;
+        if (newSessionId) {
+          sessions.set(newSessionId, { transport, server: reqServer });
+          console.error(`[session] Created: ${newSessionId}`);
+        }
+      } catch (err) {
+        console.error(`  -> POST error: ${err}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Internal server error" }));
+        }
       }
       return;
     }
 
     if (req.method === "GET") {
-      // SSE stream for server-to-client notifications
+      // SSE stream for existing session
       if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId)!;
         await session.transport.handleRequest(req, res);
         return;
       }
-      // No session yet — return 400 (client should POST initialize first)
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "No session. Send initialize POST first." }));
+      // GET without session — return server info (for validation/health checks)
+      console.error(`  -> GET /mcp without session — returning server info`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        name: "claude-cowork-memory",
+        version: "1.0.0",
+        status: "ok",
+        protocol: "MCP",
+        protocolVersion: "2025-03-26",
+      }));
       return;
     }
 
     if (req.method === "DELETE") {
-      // Session cleanup
       if (sessionId && sessions.has(sessionId)) {
         const session = sessions.get(sessionId)!;
         await session.transport.handleRequest(req, res);
