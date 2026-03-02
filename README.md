@@ -10,9 +10,9 @@ Claude CoWork forgets everything when you start a new session. Every conversatio
 
 The plugin has two parts that work together:
 
-### 1. Skill instructions (the brain)
+### 1. Behavioral instructions (the brain)
 
-A set of behavioral rules (`skills/auto-memory/SKILL.md`) that tell Claude **when and how** to use memory. These instructions are loaded by CoWork and teach Claude to:
+A set of rules you paste into CoWork's Global Instructions (see `GLOBAL-INSTRUCTIONS.md`). These teach Claude to:
 
 - **Read memory** at the start of every session (so it knows who you are)
 - **Auto-save** new knowledge as you talk — people, preferences, terms, projects, decisions
@@ -151,18 +151,14 @@ Keep this terminal open while using CoWork.
 
 ### 4. Add global instructions
 
-This step makes Claude use memory **automatically** in every session.
+This is what makes Claude actually **use** the memory tools automatically — reading at session start, auto-saving knowledge, running maintenance. Without this, Claude has the tools but won't use them proactively.
 
-In CoWork → **Settings** → **Global Instructions**, paste:
+1. Open the file `GLOBAL-INSTRUCTIONS.md` in this repo
+2. Copy everything below the `---` line
+3. Go to CoWork → **Settings** → **Global Instructions**
+4. Paste it in
 
-```
-At the start of every session, use your memory tools: call memory_stats
-then memory_read to load your persistent memory. Save new knowledge
-as you learn it during conversation. Follow the auto-memory skill
-instructions for when and how to save.
-```
-
-Without this, Claude has the memory tools available but won't use them proactively.
+This is ~25 lines that teach Claude the complete auto-save behavior: when to save, how to check for duplicates, how to handle contradictions, and when to run maintenance. It uses less than 1% of the context window.
 
 ### 5. Test it
 
